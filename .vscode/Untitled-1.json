@@ -1,0 +1,33 @@
+{
+    "type": "setting",
+    "description": "Enable or disable Copilot completions for specific languages",
+    "details": {
+        "key": "github.copilot.enable",
+        "value": {
+            "*": true
+        }
+    }
+},
+{
+    "type": "setting",
+    "description": "Controls whether to save chat history",
+    "details": {
+        "key": "github.copilot.chat.history",
+        "value": true
+    }
+},
+{
+    "type": "setting",
+    "description": "Enable code actions like 'Fix this' in the editor",
+    "details": {
+        "key": "github.copilot.editor.enableCodeActions",
+        "value": true
+    }
+},
+{
+    "type": "command",
+    "description": "Use the manage settings command to configure Copilot",
+    "details": {
+        "key": "workbench.action.chat.manageSettings"
+    }
+}
