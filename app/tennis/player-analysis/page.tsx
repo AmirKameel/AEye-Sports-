@@ -1,18 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import VideoUploader from '@/components/VideoUploader';
 import BoundingBoxSelector from '@/components/BoundingBoxSelector';
 import Link from 'next/link';
 import { v4 as uuidv4 } from 'uuid';
-import { 
-  EnhancedBoundingBox, 
-  initializeEnhancedTennisTracker, 
-  trackFrameEnhanced,
-  EnhancedTrackingFrame 
-} from '@/lib/tennis-tracker-enhanced';
+import { BoundingBox, initializeTennisTracker, trackFrame, generateAnalysisResult } from '@/lib/tennis-tracker';
 
 export default function PlayerAnalysis() {
   const { t } = useLanguage();
@@ -25,7 +20,7 @@ export default function PlayerAnalysis() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [processingMessage, setProcessingMessage] = useState<string | null>(null);
   const [showBoundingBoxSelector, setShowBoundingBoxSelector] = useState(false);
-  const [selectedBoxes, setSelectedBoxes] = useState<EnhancedBoundingBox[] | null>(null);
+  const [selectedBoxes, setSelectedBoxes] = useState<BoundingBox[] | null>(null);
   const [videoMetadata, setVideoMetadata] = useState<{width: number, height: number, duration: number} | null>(null);
   const [showUploader, setShowUploader] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<'quick' | 'accurate'>('quick');
@@ -37,7 +32,7 @@ export default function PlayerAnalysis() {
     setFileName(name);
     setShowBoundingBoxSelector(false);
     setIsAnalyzing(false);
-    setIsMetadataReady(false);
+    setIsMetadataReady(false); // Reset metadata ready state
 
     // Create video element to load metadata
     const video = document.createElement('video');
@@ -79,27 +74,17 @@ export default function PlayerAnalysis() {
     setShowUploader(true);
   };
   
-  const handleBoxesSelected = (boxes: any[]) => {
-    // Convert to EnhancedBoundingBox format
-    const enhancedBoxes: EnhancedBoundingBox[] = boxes.map(box => ({
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
-      label: box.label as 'player' | 'ball',
-      confidence: 1.0
-    }));
-
-    if (!enhancedBoxes.some(box => box.label === 'player') || !enhancedBoxes.some(box => box.label === 'ball')) {
+  const handleBoxesSelected = (boxes: BoundingBox[]) => {
+    if (!boxes.some(box => box.label === 'player') || !boxes.some(box => box.label === 'ball')) {
       setError('Please draw bounding boxes for both the player and the ball.');
       return;
     }
 
-    setSelectedBoxes(enhancedBoxes);
+    setSelectedBoxes(boxes);
     setShowBoundingBoxSelector(false);
     
-    // Start the enhanced tennis analysis
-    startEnhancedTennisAnalysis(enhancedBoxes);
+    // Start the tennis player analysis
+    startTennisAnalysis(boxes);
   };
   
   const handleBoxSelectorCancel = () => {
@@ -107,7 +92,7 @@ export default function PlayerAnalysis() {
     setShowUploader(false);
   };
   
-  const startEnhancedTennisAnalysis = async (boxes: EnhancedBoundingBox[]) => {
+  const startTennisAnalysis = async (boxes: BoundingBox[]) => {
     if (!videoUrl || !videoMetadata) {
       setError('Video not properly loaded. Please try again.');
       return;
@@ -116,13 +101,20 @@ export default function PlayerAnalysis() {
     setIsAnalyzing(true);
     setError(null);
     setProgress(0);
-    setProcessingMessage("Initializing enhanced tennis analysis...");
+    setProcessingMessage("Initializing tennis analysis...");
     
     // Generate a unique ID for this analysis
-    const newAnalysisId = `tennis-enhanced-${uuidv4()}`;
+    const newAnalysisId = `tennis-${uuidv4()}`;
     setAnalysisId(newAnalysisId);
     
     try {
+      // Initialize tennis tracker with the selected bounding boxes
+      const { initialFrame, pixelsToMeters } = initializeTennisTracker(
+        boxes,
+        videoMetadata.width,
+        videoMetadata.height
+      );
+      
       // Create a video element to extract frames
       const video = document.createElement('video');
       video.src = videoUrl;
@@ -135,7 +127,154 @@ export default function PlayerAnalysis() {
         video.load();
       });
       
-      // Extract first frame for court detection
+      // Set video duration
+      const duration = video.duration;
+      
+      // Calculate total frames to process (2 frames per second)
+      const frameRate = 2;
+      const totalFrames = Math.floor(duration * frameRate);
+      
+      // Store all frames
+      const frames = [initialFrame];
+      
+      // Process frames
+      for (let frameIndex = 1; frameIndex < totalFrames; frameIndex++) {
+        // Calculate timestamp
+        const timestamp = frameIndex / frameRate;
+        
+        // Update progress message
+        if (frameIndex < totalFrames * 0.3) {
+          setProcessingMessage("Extracting video frames...");
+        } else if (frameIndex < totalFrames * 0.6) {
+          setProcessingMessage("Tracking player and ball...");
+        } else {
+          setProcessingMessage("Analyzing player performance...");
+        }
+        
+        try {
+          // Seek to timestamp
+          video.currentTime = timestamp;
+          
+          // Wait for seeking to complete
+          await new Promise<void>((resolve) => {
+            const handleSeeked = () => {
+              video.removeEventListener('seeked', handleSeeked);
+              resolve();
+            };
+            video.addEventListener('seeked', handleSeeked);
+          });
+          
+          // Extract frame
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const context = canvas.getContext('2d');
+          
+          if (!context) {
+            throw new Error('Could not get canvas context');
+          }
+          
+          // Draw video frame to canvas
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          // Convert to base64
+          const frameBase64 = canvas.toDataURL('image/jpeg');
+          
+          // Track objects in this frame
+          const frame = await trackFrame(
+            frameBase64,
+            frameIndex,
+            timestamp,
+            frames[frames.length - 1],
+            pixelsToMeters
+          );
+          
+          // Add frame to collection
+          frames.push(frame);
+          
+          // Update progress
+          setProgress((frameIndex / totalFrames) * 100);
+        } catch (error) {
+          console.error(`Error processing frame at ${timestamp}s:`, error);
+          // Continue with next frame
+        }
+      }
+      
+      // Generate final analysis result
+      const analysisResult = generateAnalysisResult(
+        frames,
+        {
+          duration,
+          width: videoMetadata.width,
+          height: videoMetadata.height,
+          fps: 30
+        },
+        pixelsToMeters
+      );
+      
+      // Store result in localStorage
+      localStorage.setItem(`analysis-${newAnalysisId}`, JSON.stringify(analysisResult));
+      
+      // Navigate to results page
+      router.push(`/tennis/results/${newAnalysisId}?videoUrl=${encodeURIComponent(videoUrl)}`);
+    } catch (error: any) {
+      console.error('Error analyzing tennis video:', error);
+      setError(error.message || 'Error analyzing video');
+      setIsAnalyzing(false);
+    }
+  };
+
+  const startAccurateTennisAnalysis = async () => {
+    console.log('Starting accurate analysis with:', {
+      videoUrl,
+      videoMetadata,
+      isAnalyzing
+    });
+
+    if (!videoUrl || !videoMetadata) {
+      console.error('Missing required data:', { videoUrl, videoMetadata });
+      setError('Video not properly loaded. Please try again.');
+      return;
+    }
+    
+    setIsAnalyzing(true);
+    setError(null);
+    setProgress(0);
+    setProcessingMessage("Initializing accurate tennis analysis...");
+    
+    // Generate a unique ID for this analysis
+    const newAnalysisId = `tennis-${uuidv4()}`;
+    setAnalysisId(newAnalysisId);
+    
+    try {
+      console.log('Importing accurate tracking modules...');
+      const { initializeAccurateTracking, processAccurateFrame, generateAccurateAnalysis } = await import('@/lib/tennis-tracker-accurate');
+      
+      // Initialize tracking with first frame
+      console.log('Creating video element for frame extraction');
+      const video = document.createElement('video');
+      video.src = videoUrl;
+      video.crossOrigin = 'anonymous';
+      
+      console.log('Waiting for video metadata...');
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => {
+          console.log('Video metadata loaded in analysis:', {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            duration: video.duration,
+            readyState: video.readyState
+          });
+          resolve();
+        };
+        video.onerror = (e) => {
+          console.error('Video load error:', video.error);
+          reject(new Error('Failed to load video'));
+        };
+        video.load();
+      });
+
+      // Get first frame
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
@@ -153,26 +292,25 @@ export default function PlayerAnalysis() {
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       const firstFrameBase64 = canvas.toDataURL('image/jpeg');
       
-      setProcessingMessage("Detecting court boundaries...");
-      
-      // Initialize enhanced tennis tracker with court detection
-      const { initialFrame, courtBoundaries } = await initializeEnhancedTennisTracker(
-        boxes,
+      // Initialize accurate tracking
+      const { courtScale, initialPlayers } = await initializeAccurateTracking(
         firstFrameBase64,
         videoMetadata.width,
         videoMetadata.height
       );
       
-      setProcessingMessage("Court detected! Starting player and ball tracking...");
-      
       const duration = video.duration;
-      const frameRate = 3; // Process 3 frames per second for better accuracy
+      const frameRate = 20; // Process 20 frames per second
       const totalFrames = Math.floor(duration * frameRate);
       
-      // Store all frames
-      const frames: EnhancedTrackingFrame[] = [initialFrame];
+      // Create first frame array with initial data
+      const frames = [{
+        timestamp: 0,
+        players: initialPlayers,
+        courtScale
+      }];
       
-      // Process frames
+      // Process remaining frames
       for (let frameIndex = 1; frameIndex < totalFrames; frameIndex++) {
         const timestamp = frameIndex / frameRate;
         
@@ -180,42 +318,28 @@ export default function PlayerAnalysis() {
         if (frameIndex < totalFrames * 0.3) {
           setProcessingMessage("Extracting video frames...");
         } else if (frameIndex < totalFrames * 0.6) {
-          setProcessingMessage("Tracking player and ball with enhanced detection...");
-        } else if (frameIndex < totalFrames * 0.8) {
-          setProcessingMessage("Analyzing shot types and techniques...");
+          setProcessingMessage("Tracking players and court...");
         } else {
-          setProcessingMessage("Generating comprehensive analysis...");
+          setProcessingMessage("Calculating advanced metrics...");
         }
         
         try {
-          // Seek to timestamp
           video.currentTime = timestamp;
-          
-          // Wait for seeking to complete
-          await new Promise<void>((resolve) => {
-            const handleSeeked = () => {
-              video.removeEventListener('seeked', handleSeeked);
-              resolve();
-            };
-            video.addEventListener('seeked', handleSeeked);
+          await new Promise<void>(resolve => {
+            video.addEventListener('seeked', () => resolve(), { once: true });
           });
           
-          // Extract frame
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const frameBase64 = canvas.toDataURL('image/jpeg');
           
-          // Track objects in this frame with enhanced detection
-          const frame = await trackFrameEnhanced(
+          const frame = await processAccurateFrame(
             frameBase64,
-            frameIndex,
             timestamp,
-            frames
+            frames[frames.length - 1],
+            courtScale
           );
           
-          // Add frame to collection
           frames.push(frame);
-          
-          // Update progress
           setProgress((frameIndex / totalFrames) * 100);
         } catch (error) {
           console.error(`Error processing frame at ${timestamp}s:`, error);
@@ -223,10 +347,8 @@ export default function PlayerAnalysis() {
         }
       }
       
-      setProcessingMessage("Compiling final analysis results...");
-      
-      // Generate enhanced analysis result
-      const analysisResult = generateEnhancedAnalysisResult(frames, videoMetadata, courtBoundaries);
+      // Generate final analysis
+      const analysisResult = generateAccurateAnalysis(frames);
       
       // Store result in localStorage
       localStorage.setItem(`analysis-${newAnalysisId}`, JSON.stringify(analysisResult));
@@ -234,139 +356,11 @@ export default function PlayerAnalysis() {
       // Navigate to results page
       router.push(`/tennis/results/${newAnalysisId}?videoUrl=${encodeURIComponent(videoUrl)}`);
     } catch (error: any) {
-      console.error('Error analyzing tennis video:', error);
+      console.error('Error in accurate tennis analysis:', error);
       setError(error.message || 'Error analyzing video');
       setIsAnalyzing(false);
     }
   };
-
-  // Generate enhanced analysis result
-  function generateEnhancedAnalysisResult(frames: EnhancedTrackingFrame[], videoMetadata: any, courtBoundaries: any) {
-    // Calculate comprehensive statistics
-    const shots = frames.filter(frame => frame.shotAnalysis?.isShot);
-    const shotTypes = shots.reduce((acc: any, frame) => {
-      const shotType = frame.shotAnalysis?.shotType || 'unknown';
-      acc[shotType] = (acc[shotType] || 0) + 1;
-      return acc;
-    }, {});
-
-    // Calculate player speeds
-    const playerSpeeds = frames
-      .filter(frame => frame.playerSpeed > 0)
-      .map(frame => frame.playerSpeed);
-
-    // Calculate ball speeds
-    const ballSpeeds = frames
-      .filter(frame => frame.ballSpeed > 0)
-      .map(frame => frame.ballSpeed);
-
-    // Generate position heatmap
-    const heatmap = generatePositionHeatmap(frames, courtBoundaries);
-
-    // Calculate court coverage
-    const courtCoverage = calculateCourtCoverage(frames, courtBoundaries);
-
-    return {
-      playerStats: {
-        averageSpeed: playerSpeeds.length > 0 ? playerSpeeds.reduce((a, b) => a + b, 0) / playerSpeeds.length : 0,
-        maxSpeed: playerSpeeds.length > 0 ? Math.max(...playerSpeeds) : 0,
-        totalDistanceCovered: frames[frames.length - 1]?.totalPlayerDistanceCovered || 0,
-        positionHeatmap: heatmap,
-        shotsHit: shots.length,
-        forehandCount: shotTypes.forehand || 0,
-        backhandCount: shotTypes.backhand || 0,
-        serveCount: shotTypes.serve || 0,
-        volleyCount: shotTypes.volley || 0,
-        overheadCount: shotTypes.overhead || 0
-      },
-      shotStats: {
-        averageBallSpeed: ballSpeeds.length > 0 ? ballSpeeds.reduce((a, b) => a + b, 0) / ballSpeeds.length : 0,
-        maxBallSpeed: ballSpeeds.length > 0 ? Math.max(...ballSpeeds) : 0,
-        shotTypes: shotTypes,
-        shotAccuracy: calculateShotAccuracy(shots),
-        shotDistribution: calculateShotDistribution(shots, courtBoundaries)
-      },
-      courtCoverage,
-      videoMetadata: {
-        duration: videoMetadata.duration,
-        width: videoMetadata.width,
-        height: videoMetadata.height
-      },
-      frames: frames.map(frame => ({
-        timestamp: frame.timestamp,
-        playerSpeed: frame.playerSpeed,
-        ballSpeed: frame.ballSpeed,
-        isShot: frame.shotAnalysis?.isShot || false,
-        shotType: frame.shotAnalysis?.shotType,
-        shotConfidence: frame.shotAnalysis?.confidence,
-        playerPosition: frame.player ? {
-          x: frame.player.centerX,
-          y: frame.player.centerY
-        } : undefined,
-        ballPosition: frame.ball ? {
-          x: frame.ball.centerX,
-          y: frame.ball.centerY
-        } : undefined
-      })),
-      enhancedMode: true,
-      courtBoundaries: courtBoundaries
-    };
-  }
-
-  function generatePositionHeatmap(frames: EnhancedTrackingFrame[], courtBoundaries: any): number[][] {
-    const gridSize = 10;
-    const heatmap = Array(gridSize).fill(0).map(() => Array(gridSize).fill(0));
-    
-    frames.forEach(frame => {
-      if (frame.player) {
-        const gridX = Math.min(gridSize - 1, Math.floor((frame.player.centerX / courtBoundaries.courtWidth) * gridSize));
-        const gridY = Math.min(gridSize - 1, Math.floor((frame.player.centerY / courtBoundaries.courtHeight) * gridSize));
-        heatmap[gridY][gridX]++;
-      }
-    });
-    
-    return heatmap;
-  }
-
-  function calculateCourtCoverage(frames: EnhancedTrackingFrame[], courtBoundaries: any): number {
-    const gridSize = 10;
-    const visited = new Set<string>();
-    
-    frames.forEach(frame => {
-      if (frame.player) {
-        const gridX = Math.min(gridSize - 1, Math.floor((frame.player.centerX / courtBoundaries.courtWidth) * gridSize));
-        const gridY = Math.min(gridSize - 1, Math.floor((frame.player.centerY / courtBoundaries.courtHeight) * gridSize));
-        visited.add(`${gridX},${gridY}`);
-      }
-    });
-    
-    return (visited.size / (gridSize * gridSize)) * 100;
-  }
-
-  function calculateShotAccuracy(shots: EnhancedTrackingFrame[]): number {
-    // Simplified accuracy calculation based on shot confidence
-    if (shots.length === 0) return 0;
-    
-    const totalConfidence = shots.reduce((sum, shot) => sum + (shot.shotAnalysis?.confidence || 0), 0);
-    return (totalConfidence / shots.length) * 100;
-  }
-
-  function calculateShotDistribution(shots: EnhancedTrackingFrame[], courtBoundaries: any): any {
-    const distribution = {
-      crosscourt: 0,
-      downTheLine: 0,
-      center: 0
-    };
-    
-    shots.forEach(shot => {
-      const direction = shot.shotAnalysis?.shotDirection || 'unknown';
-      if (direction === 'crosscourt') distribution.crosscourt++;
-      else if (direction === 'down-the-line') distribution.downTheLine++;
-      else if (direction === 'center') distribution.center++;
-    });
-    
-    return distribution;
-  }
 
   // Handle bounding box selector visibility for quick mode
   useEffect(() => {
@@ -374,6 +368,18 @@ export default function PlayerAnalysis() {
       setShowBoundingBoxSelector(true);
     }
   }, [videoUrl, videoMetadata, analysisMode]);
+
+  // Watch for metadata ready state
+  useEffect(() => {
+    if (isMetadataReady && videoUrl && videoMetadata && analysisMode === 'accurate') {
+      console.log('Metadata ready, starting analysis with:', {
+        videoUrl,
+        videoMetadata,
+        isMetadataReady
+      });
+      startAccurateTennisAnalysis();
+    }
+  }, [isMetadataReady, videoUrl, videoMetadata, analysisMode]);
 
   return (
     <div className="min-h-screen bg-gray-50 py-12">
@@ -383,38 +389,53 @@ export default function PlayerAnalysis() {
             {t('tennis.pages.playerAnalysis.title')}
           </h1>
           <p className="text-lg text-gray-600 mb-8">
-            Enhanced Tennis Analysis with Accurate Shot Detection
+            {t('tennis.pages.playerAnalysis.subtitle')}
           </p>
         </div>
 
         {!showUploader && !showBoundingBoxSelector && !isAnalyzing && (
           <div className="mt-8 max-w-3xl mx-auto">
             <div className="bg-white rounded-lg shadow p-6 mb-8">
-              <h2 className="text-xl font-semibold mb-6">Enhanced Tennis Analysis</h2>
+              <h2 className="text-xl font-semibold mb-6">{t('tennis.pages.playerAnalysis.chooseAnalysisType')}</h2>
               
+              {/* Analysis Mode Selection */}
               <div className="mb-8">
-                <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6">
-                  <h3 className="text-lg font-medium text-blue-900 mb-2">🎾 Enhanced Shot Detection Features</h3>
-                  <ul className="text-sm text-blue-800 space-y-1">
-                    <li>✅ Automatic court boundary detection</li>
-                    <li>✅ Accurate shot type classification (Serve, Forehand, Backhand, Volley, Overhead)</li>
-                    <li>✅ Advanced ball trajectory analysis</li>
-                    <li>✅ Player movement pattern recognition</li>
-                    <li>✅ Shot direction analysis (Crosscourt, Down-the-line, Center)</li>
-                    <li>✅ Confidence scoring for each detected shot</li>
-                  </ul>
-                </div>
+                <h3 className="text-lg font-medium mb-4">Select Analysis Mode</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <button
+                    className={`p-4 rounded-lg border-2 text-left ${
+                      analysisMode === 'quick' 
+                        ? 'border-blue-500 bg-blue-50' 
+                        : 'border-gray-200 hover:border-blue-300'
+                    }`}
+                    onClick={() => {
+                      setAnalysisMode('quick');
+                      startPlayerAnalysis();
+                    }}
+                  >
+                    <div className="font-semibold mb-2">Quick Analysis</div>
+                    <p className="text-sm text-gray-600">
+                      Faster processing with basic metrics. Best for quick performance feedback.
+                    </p>
+                  </button>
 
-                <button
-                  className="w-full p-6 rounded-lg border-2 border-blue-500 bg-blue-50 text-left hover:bg-blue-100 transition-colors"
-                  onClick={startPlayerAnalysis}
-                >
-                  <div className="font-semibold text-lg mb-2">🚀 Start Enhanced Analysis</div>
-                  <p className="text-sm text-gray-600">
-                    Upload your tennis video for comprehensive analysis with improved shot detection accuracy.
-                    The system will automatically detect court boundaries and provide detailed insights.
-                  </p>
-                </button>
+                  <button
+                    className={`p-4 rounded-lg border-2 text-left ${
+                      analysisMode === 'accurate' 
+                        ? 'border-blue-500 bg-blue-50' 
+                        : 'border-gray-200 hover:border-blue-300'
+                    }`}
+                    onClick={() => {
+                      setAnalysisMode('accurate');
+                      startPlayerAnalysis();
+                    }}
+                  >
+                    <div className="font-semibold mb-2">Accurate Analysis</div>
+                    <p className="text-sm text-gray-600">
+                      Detailed multi-player tracking with advanced metrics. Takes longer but provides comprehensive insights.
+                    </p>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -433,9 +454,9 @@ export default function PlayerAnalysis() {
                 </button>
               </div>
               <p className="text-gray-600 mb-4">
-                Upload a tennis video for enhanced analysis. For best results, use a video that clearly shows the player, ball, and court lines.
+                {t('tennis.pages.playerAnalysis.uploadDescription')}
                 <br />
-                <strong>{t('common.note')}:</strong> The enhanced system will automatically detect court boundaries and provide more accurate shot classification.
+                <strong>{t('common.note')}:</strong> {t('tennis.pages.playerAnalysis.uploadNote')}
               </p>
               <VideoUploader 
                 sportType="tennis"
@@ -456,25 +477,20 @@ export default function PlayerAnalysis() {
         {isAnalyzing && (
           <div className="mt-8 max-w-3xl mx-auto">
             <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold mb-4">🎾 Enhanced Tennis Analysis in Progress</h2>
+              <h2 className="text-xl font-semibold mb-4">{t('tennis.pages.playerAnalysis.analyzingVideo')}</h2>
               <div className="mb-4">
                 <p className="text-gray-600 mb-2">{processingMessage}</p>
-                <div className="w-full bg-gray-200 rounded-full h-3">
+                <div className="w-full bg-gray-200 rounded-full h-2.5">
                   <div 
-                    className="bg-gradient-to-r from-blue-500 to-green-500 h-3 rounded-full transition-all duration-300" 
+                    className="bg-blue-600 h-2.5 rounded-full" 
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
                 <p className="text-sm text-gray-500 mt-2">{Math.round(progress)}% {t('common.complete')}</p>
               </div>
-              
-              <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mt-4">
-                <p className="text-blue-800 text-sm">
-                  <strong>Enhanced Processing:</strong> The system is performing advanced court detection, 
-                  multi-criteria shot analysis, and accurate shot type classification. This provides 
-                  significantly better results than basic analysis.
-                </p>
-              </div>
+              <p className="text-gray-600 italic text-sm mt-4">
+                {t('tennis.pages.playerAnalysis.analysisWaitMessage')}
+              </p>
             </div>
           </div>
         )}
@@ -489,12 +505,12 @@ export default function PlayerAnalysis() {
         )}
 
         <div className="mt-8 text-center">
-          <Link
-            href="/tennis"
+          <button
+            onClick={() => router.back()}
             className="text-blue-600 hover:text-blue-800"
           >
             {t('common.backToTennis')}
-          </Link>
+          </button>
         </div>
       </div>
     </div>
