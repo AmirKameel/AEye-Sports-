@@ -33,7 +33,7 @@ function cleanResults(results: string): any {
 
 // Initialize the Gemini API client
 const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "AIzaSyAm-P_r9aXrJ6mOsF9QGW0uxGjgNnVBAIA";
-const GEMINI_MODEL = "gemini-2.5-pro-exp-03-25";
+const GEMINI_MODEL = "gemini-1.5-flash";
 
 // Track API request timestamps for rate limiting
 const API_REQUESTS: number[] = [];
@@ -243,4 +243,4 @@ export async function analyzeTennisMatch(imageBase64: string): Promise<string> {
 
   const response = await geminiInference(imageBase64, prompt, 0.7);
   return response.text;
-} 
+}
