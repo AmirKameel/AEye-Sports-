@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { useLanguage } from '../../../lib/i18n/LanguageContext';
-import TennisVideoAnalysis from '@/components/TennisVideoAnalysis';
+import TennisVideoAnalysisGemini from '@/components/TennisVideoAnalysisGemini';
 
 export default function TennisVideoAnalysisPage() {
   const { t } = useLanguage();
@@ -17,12 +17,7 @@ export default function TennisVideoAnalysisPage() {
           </Link>
         </div>
         
-        <div className="mb-6">
-          <h2 className="text-2xl font-bold mb-2">{t('tennis.pages.videoAnalysis.title')}</h2>
-          <p className="text-gray-600">{t('tennis.pages.videoAnalysis.subtitle')}</p>
-        </div>
-        
-        <TennisVideoAnalysis />
+        <TennisVideoAnalysisGemini />
       </div>
     </div>
   );
