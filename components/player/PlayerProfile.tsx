@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
-import { getPlayerProfile, getPlayerAttendance, getPlayerPrivateSessions, getEligibleTournaments } from '@/lib/supabase-config';
+import { supabase, getPlayerProfile, getPlayerAttendance, getPlayerPrivateSessions, getEligibleTournaments } from '@/lib/supabase-config';
 import AttendanceCalendar from './AttendanceCalendar';
 import GroupPlanCalendar from './GroupPlanCalendar';
 import PrivateSessionsCalendar from './PrivateSessionsCalendar';
