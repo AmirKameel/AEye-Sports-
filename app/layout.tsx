@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { LanguageProvider } from "../lib/i18n/LanguageContext";
-import ClientLayout from "../components/ClientLayout";
+import { AuthProvider } from "@/components/auth/AuthProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "AEye Sport",
-  description: "AI-powered analysis for football and tennis videos",
+  title: "AEye Sport - Tennis Academy Management",
+  description: "AI-powered tennis academy management platform with comprehensive player profiling and analysis",
 };
 
 export default function RootLayout({
@@ -19,11 +18,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <LanguageProvider>
-          <ClientLayout>
-            {children}
-          </ClientLayout>
-        </LanguageProvider>
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
