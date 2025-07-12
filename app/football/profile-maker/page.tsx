@@ -39,6 +39,7 @@ export default function ProfileMakerPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [message, setMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -162,6 +163,95 @@ export default function ProfileMakerPage() {
       });
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  // Download profile as PDF
+  const downloadProfileAsPDF = async () => {
+    if (!profile.name || !profile.position) {
+      setMessage({
+        text: 'Please enter player name and position first',
+        type: 'error'
+      });
+      return;
+    }
+
+    setIsDownloadingPDF(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch('/api/export-profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          profile: {
+            fullName: profile.name,
+            position: profile.position,
+            team: profile.team,
+            age: profile.age,
+            height: profile.height,
+            weight: profile.weight,
+            nationality: profile.nationality,
+            preferredFoot: profile.preferredFoot,
+            phoneNumber: profile.phoneNumber,
+            email: profile.email,
+            city: profile.city,
+            country: profile.country,
+            description: profile.description,
+            strengths: profile.strengths.filter(s => s.trim() !== ''),
+            weaknesses: profile.weaknesses.filter(w => w.trim() !== ''),
+            clubs: profile.clubs.filter(c => c.name.trim() !== ''),
+            profileImage: profile.profileImage
+          }
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to generate PDF');
+      }
+
+      // Check content type
+      const contentType = response.headers.get('content-type');
+      
+      if (contentType === 'text/html') {
+        // In development mode, we get HTML content directly
+        const html = await response.text();
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        setMessage({
+          text: 'Profile opened in new tab. Please use browser print function to save as PDF.',
+          type: 'success'
+        });
+        return;
+      }
+
+      // For production or direct PDF response
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${profile.name.toLowerCase().replace(/\s+/g, '-')}-profile.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setMessage({
+        text: 'Profile downloaded successfully as PDF',
+        type: 'success'
+      });
+    } catch (error: any) {
+      console.error('Error downloading profile:', error);
+      setMessage({
+        text: error.message || 'Failed to download profile',
+        type: 'error'
+      });
+    } finally {
+      setIsDownloadingPDF(false);
     }
   };
 
@@ -419,18 +509,11 @@ export default function ProfileMakerPage() {
 
               <div className="flex space-x-4">
                 <button
-                  onClick={() => exportProfile('png')}
-                  disabled={isExporting || !profile.description}
-                  className={`flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 ${(isExporting || !profile.description) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  onClick={downloadProfileAsPDF}
+                  disabled={isDownloadingPDF || !profile.name || !profile.position}
+                  className={`flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 ${(isDownloadingPDF || !profile.name || !profile.position) ? 'opacity-70 cursor-not-allowed' : ''}`}
                 >
-                  {isExporting ? 'Exporting...' : 'Export as PNG'}
-                </button>
-                <button
-                  onClick={() => exportProfile('pdf')}
-                  disabled={isExporting || !profile.description}
-                  className={`flex-1 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 ${(isExporting || !profile.description) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                >
-                  {isExporting ? 'Exporting...' : 'Export as PDF'}
+                  {isDownloadingPDF ? 'Generating PDF...' : 'Download as PDF'}
                 </button>
               </div>
             </div>
@@ -439,4 +522,4 @@ export default function ProfileMakerPage() {
       </div>
     </div>
   );
-} 
+}
