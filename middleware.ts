@@ -10,13 +10,16 @@ export async function middleware(req: NextRequest) {
     data: { session },
   } = await supabase.auth.getSession();
 
-  // If user is not signed in and the current path is a protected route, redirect to sign in
-  const protectedRoutes = ['/profile', '/dashboard'];
+  // All routes are protected except for home, auth pages, and static assets
+  const publicRoutes = ['/', '/auth/signin', '/auth/signup'];
+  const isStaticAsset = req.nextUrl.pathname.match(/\.(svg|png|jpg|jpeg|gif|webp|css|js)$/);
+  const isApiRoute = req.nextUrl.pathname.startsWith('/api/');
   const isProtectedRoute = protectedRoutes.some(route => 
     req.nextUrl.pathname.startsWith(route)
   );
+  const isPublicRoute = publicRoutes.includes(req.nextUrl.pathname) || isStaticAsset || isApiRoute;
 
-  if (isProtectedRoute && !session) {
+  if (!isPublicRoute && !session) {
     return NextResponse.redirect(new URL('/auth/signin', req.url));
   }
 
