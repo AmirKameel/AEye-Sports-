@@ -14,6 +14,9 @@ export async function middleware(req: NextRequest) {
   const publicRoutes = ['/', '/auth/signin', '/auth/signup'];
   const isStaticAsset = req.nextUrl.pathname.match(/\.(svg|png|jpg|jpeg|gif|webp|css|js)$/);
   const isApiRoute = req.nextUrl.pathname.startsWith('/api/');
+  const isProtectedRoute = protectedRoutes.some(route => 
+    req.nextUrl.pathname.startsWith(route)
+  );
   const isPublicRoute = publicRoutes.includes(req.nextUrl.pathname) || isStaticAsset || isApiRoute;
 
   if (!isPublicRoute && !session) {
