@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import PerformanceAnalysis from '@/components/PerformanceAnalysis';
+import FootballVideoAnalysisGemini from '@/components/FootballVideoAnalysisGemini';
 
 export default function VideoAnalysisPage() {
   return (
@@ -14,7 +14,7 @@ export default function VideoAnalysisPage() {
           </Link>
         </div>
         
-        <PerformanceAnalysis />
+        <FootballVideoAnalysisGemini />
       </div>
     </div>
   );
